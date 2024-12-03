@@ -7,19 +7,20 @@ namespace Sheet.Skia.Controls
     public partial class SheetView : Grid
     {
         private readonly SKCanvasView canvasView = new();
-        public const string PromptSignalName = "Microsoft.Maui.Controls.SendPrompt";
+        private SKPoint _offset = new(0, 0);
+        private SKPoint _lastTouch;
 
         public SheetView()
         {
+            canvasView.EnableTouchEvents = true;
+            canvasView.InputTransparent = false;
             canvasView.PaintSurface += CanvasView_PaintSurface;
             canvasView.Touch += CanvasView_Touch;
             RowDefinitions = [new RowDefinition { Height = GridLength.Star },];
             ColumnDefinitions = [new ColumnDefinition { Width = GridLength.Star },];
-            this.Add(canvasView,0,0);
-            InputTransparent = true;
-        }
 
-        private float _fontSize = 24;
+            this.Add(canvasView, 0, 0);
+        }
 
         private void CanvasView_PaintSurface(object? sender, SkiaSharp.Views.Maui.SKPaintSurfaceEventArgs e)
         {
@@ -27,20 +28,8 @@ namespace Sheet.Skia.Controls
             {
                 var canvas = e.Surface.Canvas;
                 canvas.Clear(SKColors.Transparent);
+                canvas.Translate(_offset.X, _offset.Y);
 
-                var rectPaint = new SKPaint
-                {
-                    Color = SKColors.Gray,
-                    Style = SKPaintStyle.Stroke,
-                    StrokeWidth = 2
-                };
-
-                var textPaint = new SKPaint
-                {
-                    Color = SKColors.Black,
-                    TextSize = _fontSize,
-                    IsAntialias = true
-                };
                 int y = 0;
                 var header = ItemsSource.Header;
 
@@ -53,43 +42,65 @@ namespace Sheet.Skia.Controls
                     int height = y + header.Height;
 
                     SKRect _textRect = new(header_x, y, width, height);
-                    canvas.DrawRect(_textRect, rectPaint);
+                    canvas.DrawRect(_textRect, PaintCellStroke(false));
 
                     var textBounds = new SKRect();
-                    textPaint.MeasureText(column.Content, ref textBounds);
+                    PaintCellText(false).MeasureText(column.Content, ref textBounds);
 
                     // Calculate position to center the text
                     float _x = _textRect.Left + (_textRect.Width - textBounds.Width) / 2;
                     float _y = _textRect.Top + (_textRect.Height + textBounds.Height) / 2;
 
-                    canvas.DrawText(column.Content, _x, _y, textPaint);
+                    canvas.DrawText(column.Content, _x, _y, PaintCellText(false));
                 }
 
                 foreach (var row in ItemsSource.Rows)
                 {
-                    y = row.Index == 0 ? 0 : y +row.Height;
+                    y += row.Height;
                     int x = 0;
                     foreach (var cell in row.Cells)
                     {
-                        x = cell.Index == 0 ? 0 : x + header.Columns[cell.Index-1].Width;
+                        if (cell.Index == 0)
+                        {
+                            x = 0;
+                        }
+                        else
+                        {
+                            x += header.Columns[cell.Index - 1].Width;
+                        }
 
                         int width = x + header.Columns[cell.Index].Width;
                         int height = y + row.Height;
 
                         SKRect _textRect = new(x, y, width, height);
-                        canvas.DrawRect(_textRect, rectPaint);
+                        cell.SetRect(_textRect);
+                        canvas.DrawRect(_textRect, PaintCellStroke(cell.Selected));
 
                         var textBounds = new SKRect();
-                        textPaint.MeasureText(cell.Content, ref textBounds);
+                        PaintCellText(cell.Selected).MeasureText(cell.Content, ref textBounds);
 
                         // Calculate position to center the text
                         float _x = _textRect.Left + (_textRect.Width - textBounds.Width) / 2;
                         float _y = _textRect.Top + (_textRect.Height + textBounds.Height) / 2;
 
-                        canvas.DrawText(cell.Content, _x, _y, textPaint);
+                        canvas.DrawText(cell.Content, _x, _y, PaintCellText(cell.Selected));
                     }
                 }
             }
+
+            static SKPaint PaintCellStroke(bool selected) => new()
+            {
+                Color = selected ? SKColors.Red : SKColors.Gray,
+                Style = selected ? SKPaintStyle.Fill : SKPaintStyle.Stroke,
+                StrokeWidth = 2
+            };
+
+            static SKPaint PaintCellText(bool selected) => new()
+            {
+                Color = selected ? SKColors.White : SKColors.Black,
+                TextSize = 24,
+                IsAntialias = true
+            };
         }
 
         static void OnBindablePropertyChanged(BindableObject bindable, object oldValue, object newValue)
@@ -99,25 +110,54 @@ namespace Sheet.Skia.Controls
 
         private void CanvasView_Touch(object sender, SKTouchEventArgs e)
         {
-            Console.WriteLine($"X {e.Location.X} / Y {e.Location.Y}");
+            if (sender is SKCanvasView canvas)
+            {
+                var sheetList = ((SheetView)canvas.Parent).ItemsSource;
+                switch (e.ActionType)
+                {
+                    case SKTouchAction.Pressed:
+                        _lastTouch = e.Location;
+                        break;
+                    case SKTouchAction.Moved:
+                        // Calculate the difference between the last touch and the current position
+                        // var deltaX = e.Location.X - _lastTouch.X;
+                        var deltaY = e.Location.Y - _lastTouch.Y;
 
-            //if (e.ActionType == SKTouchAction.Pressed && _textRect.Contains(e.Location))
-            //{
-            //    // Start editing
-            //    _isEditing = true;
-            //    DisplayPromptAsync("Edit Text", "Enter new text:", "OK", "Cancel", _text)
-            //        .ContinueWith(task =>
-            //        {
-            //            if (task.Result != null)
-            //            {
-            //                _text = task.Result;
-            //                CanvasView.InvalidateSurface();
-            //            }
-            //            _isEditing = false;
-            //        }, TaskScheduler.FromCurrentSynchronizationContext());
-            //}
+                        // Update the offset
+                        //  _offset.X += deltaX;
+                        _offset.Y += deltaY;
 
-            e.Handled = true;
+                        // Update the last touch point
+                        _lastTouch = e.Location;
+
+                        // Redraw the canvas
+                        canvas.InvalidateSurface();
+                        break;
+                    case SKTouchAction.Released:
+                        var adjustedTouchPoint = new SKPoint(e.Location.X, e.Location.Y - _offset.Y);
+                        foreach (var row in sheetList.Rows)
+                        {
+                            foreach (var cell in row.Cells)
+                            {
+                                if (cell.Selected)
+                                {
+                                    cell.Selected = false;
+                                    canvas.InvalidateSurface();
+                                }
+                                if (cell.rect.Contains(adjustedTouchPoint))
+                                {
+                                    cell.Selected = true;
+                                    canvas.InvalidateSurface();
+                                }
+                            }
+                        }
+                        break;
+                    case SKTouchAction.Cancelled:
+                        break;
+                }
+            }
+
+            e.Handled = true; // Mark the event as handled
         }
 
         #region RowStroke
@@ -234,35 +274,6 @@ namespace Sheet.Skia.Controls
             get => (SheetList)GetValue(ItemsSourceProperty);
             set => SetValue(ItemsSourceProperty, value);
         }
-        #endregion
-
-        public Task<string> DisplayPromptAsync(string title, string message, string accept = "OK", string cancel = "Cancel", string placeholder = null, int maxLength = -1, Keyboard keyboard = default(Keyboard), string initialValue = "")
-        {
-            var args = new Microsoft.Maui.Controls.Internals.PromptArguments(title, message, accept, cancel, placeholder, maxLength, keyboard, initialValue);
-            return args.Result.Task;
-        }
-
-        #region Private Methods
-        private SKPaint GetRowPaint()
-        {
-            return new SKPaint
-            {
-                TextSize = RowFontSize,
-                Typeface = SKTypeface.FromFamilyName(RowTypeface),
-                IsAntialias = true
-            };
-        }
-
-        private static SKPaint GetColumnPaint(SheetView sheet)
-        {
-            return new SKPaint
-            {
-                TextSize = sheet.ColumnFontSize,
-                Typeface = SKTypeface.FromFamilyName(sheet.ColumnTypeface),
-                IsAntialias = true
-            };
-        }
-
         #endregion
     }
 }
